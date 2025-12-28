@@ -1,0 +1,53 @@
+# Testing IAM Policies with the IAM Policy Simulator
+
+# Problem:
+# You have an IAM policy that you would like to put into use but would like to test its
+# effectiveness first.
+
+# Solution:
+Attach an IAM policy to an IAM role and simulate actions with the IAM Policy Simulator.
+
+# Steps
+
+# Create a file called assume-role-policy.json with the following content (file pro‐
+# vided in the repository):
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "ec2.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+
+# Create an IAM role using the assume-role-policy.json file:
+aws iam create-role --assume-role-policy-document \
+file://assume-role-policy.json --role-name <role-name>
+
+# Attach the IAM managed policy for AmazonEC2ReadOnlyAccess to the IAM role:
+aws iam attach-role-policy --role-name <role-name> \
+--policy-arn arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+
+# Validation checks: Simulate the effect of the IAM policy you are using testing several
+# different types of actions on the EC2 service:
+aws iam simulate-principal-policy \
+--policy-source-arn arn:aws:iam::$AWS_ACCOUNT_ARN:role/<role-name> \
+--action-names ec2:CreateInternetGateway
+
+# Test the ec2:DescribeInstances action:
+aws iam simulate-principal-policy \
+--policy-source-arn arn:aws:iam::$AWS_ACCOUNT_ARN:role/<role-name> \
+--action-names ec2:DescribeInstances
+
+# Clean up 
+
+# Detach the AmazonEC2ReadOnlyAccess policy from the role:
+aws iam detach-role-policy --role-name <role-name> \
+--policy-arn arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+
+# Delete the IAM Role for the proxy:
+aws iam delete-role --role-name AWSCookbook104IamRole
