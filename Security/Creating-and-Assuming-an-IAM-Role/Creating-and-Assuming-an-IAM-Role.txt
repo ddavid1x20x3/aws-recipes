@@ -1,5 +1,13 @@
 # Creating and Assuming an IAM Role
 
+# Problem:
+# To ensure that you are not always using administrative permissions, you need to
+# create an IAM role for development use in your AWS account.
+
+# Solution:
+# Create a role using an IAM policy that will allow the role to be assumed later.
+# Attach the AWS managed PowerUserAccess IAM policy to the role.
+
 # Retrieve the ARN for your user and set it as a variable:
 PRINCIPAL_ARN=$(aws sts get-caller-identity --query Arn --output text)
 
