@@ -1,0 +1,280 @@
+# Delegating IAM Administrative Capabilities Using Permissions Boundaries
+
+# Problem:
+# You need to grant team members the ability to deploy Lambda functions and create IAM
+# roles for them. You need to limit the effective permissions of the IAM roles created
+# so that they allow only actions needed by the function.
+
+# Solution:
+# Create a permissions boundary policy, create an IAM role for Lambda developers,
+# create an IAM policy that specifies the boundary policy, and attach the policy to
+# the role you created.
+
+# Steps
+
+# Create a file named assume-role-policy-template.json with the following content
+# (file provided in the repository):
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "PRINCIPAL_ARN"
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+
+# Retrieve the ARN for your user and set it as a variable:
+PRINCIPAL_ARN=$(aws sts get-caller-identity --query Arn --output text)
+
+# Use the sed command to replace PRINCIPAL_ARN in the assume-role-policy-template.json
+# file provided in the repository and generate the assume-role-policy.json file:
+sed -e "s|PRINCIPAL_ARN|${PRINCIPAL_ARN}|g" \
+assume-role-policy-template.json > assume-role-policy.json
+
+# Create a role and specify the assume role policy file:
+ROLE_ARN=$(aws iam create-role --role-name <role-name> \
+--assume-role-policy-document file://assume-role-policy.json \
+--output text --query Role.Arn)
+
+# Create a permissions boundary JSON file named boundary-template.json with the following
+# content. This allows specific DynamoDB, S3, and CloudWatch Logs actions (file provided
+# in the repository):
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "CreateLogGroup",
+            "Effect": "Allow",
+            "Action": "logs:CreateLogGroup",
+            "Resource": "arn:aws:logs:*:AWS_ACCOUNT_ID:*"
+        },
+        {
+            "Sid": "CreateLogStreamandEvents",
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ],
+            "Resource": "arn:aws:logs:*:AWS_ACCOUNT_ID:*"
+        },
+        {
+            "Sid": "DynamoDBPermissions",
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:DeleteItem"
+            ],
+            "Resource": "arn:aws:dynamodb:*:AWS_ACCOUNT_ID:table/AWSCookbook*"
+        },
+        {
+            "Sid": "S3Permissions",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject"
+            ],
+            "Resource": "arn:aws:s3:::AWSCookbook*/*"
+        }
+    ]
+}
+
+# Define your account ID:
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# Use the sed command to replace AWS_ACCOUNT_ID in the boundary-policy-template.json
+# file and generate the boundary-policy.json file:
+sed -e "s|AWS_ACCOUNT_ID|${AWS_ACCOUNT_ID}|g" \
+boundary-policy-template.json > boundary-policy.json
+
+# Create the permissions boundary policy by using the AWS CLI:
+aws iam create-policy --policy-name AWSCookbook105PB \
+--policy-document file://boundary-policy.json
+
+# Create a policy file named policy-template.json for the role (file provided in the
+# repository):
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "DenyPBDelete",
+            "Effect": "Deny",
+            "Action": "iam:DeleteRolePermissionsBoundary",
+            "Resource": "*"
+        },
+        {
+            "Sid": "IAMRead",
+            "Effect": "Allow",
+            "Action": [
+                "iam:Get*",
+                "iam:List*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "IAMPolicies",
+            "Effect": "Allow",
+            "Action": [
+                "iam:CreatePolicy",
+                "iam:DeletePolicy",
+                "iam:CreatePolicyVersion",
+                "iam:DeletePolicyVersion",
+                "iam:SetDefaultPolicyVersion"
+            ],
+            "Resource": "arn:aws:iam::AWS_ACCOUNT_ID:policy/<policy-name>*"
+        },
+        {
+            "Sid": "IAMRolesWithBoundary",
+            "Effect": "Allow",
+            "Action": [
+                "iam:CreateRole",
+                "iam:DeleteRole",
+                "iam:PutRolePolicy",
+                "iam:DeleteRolePolicy",
+                "iam:AttachRolePolicy",
+                "iam:DetachRolePolicy"
+            ],
+            "Resource": [
+                "arn:aws:iam::AWS_ACCOUNT_ID:role/<role-name>*"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "iam:PermissionsBoundary": "arn:aws:iam::AWS_ACCOUNT_ID:policy/<permissions-boundary>"
+                }
+            }
+        },
+        {
+            "Sid": "ServerlessFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "lambda:*",
+                "logs:*",
+                "dynamodb:*",
+                "s3:*"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "PassRole",
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": "arn:aws:iam::AWS_ACCOUNT_ID:role/<role-name>*",
+            "Condition": {
+                "StringLikeIfExists": {
+                    "iam:PassedToService": "lambda.amazonaws.com"
+                }
+            }
+        },
+        {
+            "Sid": "ProtectPB",
+            "Effect": "Deny",
+            "Action": [
+                "iam:CreatePolicyVersion",
+                "iam:DeletePolicy",
+                "iam:DeletePolicyVersion",
+                "iam:SetDefaultPolicyVersion"
+            ],
+            "Resource": [
+                "arn:aws:iam::AWS_ACCOUNT_ID:policy/<permissions-boundary>",
+                "arn:aws:iam::AWS_ACCOUNT_ID:policy/<policy-name>"
+            ]
+        }
+    ]
+}
+
+# Use the sed command to replace AWS_ACCOUNT_ID in the policy-template.json file and
+# generate the policy.json file:
+sed -e "s|AWS_ACCOUNT_ID|${AWS_ACCOUNT_ID}|g" \
+policy-template.json > policy.json
+
+# Create the policy for developer access:
+aws iam create-policy --policy-name <policy-name> \
+--policy-document file://policy.json
+
+# Attach the policy to the role you created in step 2:
+aws iam attach-role-policy --policy-arn \
+arn:aws:iam::$AWS_ACCOUNT_ID:policy/<policy-name> \
+--role-name <role-name>
+
+# Validation checks
+
+# Assume the role you created and set the output to local variables for the AWS CLI:
+creds=$(aws --output text sts assume-role --role-arn $ROLE_ARN \
+--role-session-name "<role-session-name>" | \
+grep CREDENTIALS | cut -d " " -f2,4,5)
+export AWS_ACCESS_KEY_ID=$(echo $creds | cut -d " " -f2)
+export AWS_SECRET_ACCESS_KEY=$(echo $creds | cut -d " " -f4)
+export AWS_SESSION_TOKEN=$(echo $creds | cut -d " " -f5)
+
+# Try to create an IAM role for a Lambda function, create an assume role policy for the
+# Lambda service (lambda-assume-role-policy.json):
+{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Service": "lambda.amazonaws.com"
+        },
+        "Action": "sts:AssumeRole"
+      }
+    ]
+  }
+
+# Create the role, specifying the permissions boundary, which conforms to the role-
+# naming standard specified in the policy:
+TEST_ROLE_1=$(aws iam create-role --role-name <role-name-test1> \
+--assume-role-policy-document \
+file://lambda-assume-role-policy.json \
+--permissions-boundary \
+arn:aws:iam::$AWS_ACCOUNT_ID:policy/<policy-name> \
+--output text --query Role.Arn)
+
+# Attach the managed AmazonDynamoDBFullAccess policy to the role:
+aws iam attach-role-policy --role-name <role-name-test1> \
+--policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+
+# Attach the managed CloudWatchFullAccess policy to the role:
+aws iam attach-role-policy --role-name <role-name-test1> \
+--policy-arn arn:aws:iam::aws:policy/CloudWatchFullAccess
+
+# Clean up
+
+# Unset the variables you set to assume the created role in your terminal:
+unset AWS_ACCESS_KEY_ID
+unset AWS_SECRET_ACCESS_KEY
+unset AWS_SESSION_TOKEN
+
+# Detach the AmazonDynamoDBFullAccess and CloudWatchFullAccess policy from the role:
+aws iam detach-role-policy --role-name <role-name-test1> \
+--policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+aws iam detach-role-policy --role-name <role-name-test1> \
+--policy-arn arn:aws:iam::aws:policy/CloudWatchFullAccess
+
+# Delete the IAM Role you used to test:
+aws iam delete-role --role-name <role-name-test1>
+
+# Detach the Policy you created from the role:
+aws iam detach-role-policy --role-name <role-name> \
+--policy-arn arn:aws:iam::$AWS_ACCOUNT_ID:policy/<policy-name>
+
+# Delete the policy:
+aws iam delete-policy --policy-arn \
+arn:aws:iam::$AWS_ACCOUNT_ID:policy/<policy-name>
+
+# Delete the permissions boundary:
+aws iam delete-policy --policy-arn \
+arn:aws:iam::$AWS_ACCOUNT_ID:policy/<permissions-boundary>
+
+# Delete the IAM Role:
+aws iam delete-role --role-name <role-name>
+
+# Unset the variables you set:
+unset PRINCIPAL_ARN
+unset ROLE_ARN
+unset TEST_ROLE_1
+unset creds
