@@ -1,0 +1,27 @@
+# AWS CDK
+
+# CDK allows you to describe your infrastructure using constructs in a 
+# high-level programming language such as Python, which then gets 
+# compiled into CloudFormation templates for you.
+
+# To use CDK, Node.js has to be installed first. Check or verify Node.js 
+# is installed:
+node -v 
+
+# Install CDK as a global package:
+npm install -g aws-cdk
+
+# Verify CDK has been installed:
+cdk version
+
+# To initiate an CDK Python project, change into the project directory
+# and run:
+cdk init app --language python
+
+# To activate the Python virtual environment that the CDK has created
+# for you, run the following command:
+.\.venv\Scripts\activate.bat
+
+# After activating the virtual environment, install the packages 
+# required by the project. You can do this by running the following:
+python3 -m pip install -r requirements.txt

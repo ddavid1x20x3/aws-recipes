@@ -1,0 +1,23 @@
+# AWS CLI Setup
+
+# Generate Access Keys for the user via console:
+IAM > Users > Click the username > Create access key > Select Command 
+Line Interface
+
+# To install AWS CLI follow these instructions:
+https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+
+# Set up the AWS CLI access for the users with generated and retrived
+# access keys:
+aws configure
+AWS Access Key ID [None]: XXXXXXXXXXXX
+AWS Secret Access Key [None]: XXXXXXXXXXXX
+Default region name [None]: us-east-1
+Default output format [None]: json
+
+# Verify everything was setup corectly. This command should return user 
+# information:
+aws sts get-caller-identity
+
+# AWS CLI configuration files are stored in:
+C:\Users\%username%\.aws 

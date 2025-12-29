@@ -1,0 +1,24 @@
+# Boto3 Installation
+
+# Make sure Python is installed on your machine. Python can be downloaded
+# from this link:
+https://www.python.org/downloads/windows/
+
+# Verify the Python is installed from CMD:
+python --version
+
+# Install Boto3:
+pip install boto3
+
+# If command above doesn't work, try:
+python –m pip install boto3
+
+# Verify the installation has worked by created a Python script with the
+# following content:
+import boto3
+client = boto3.client("sts")
+resp = client.get_caller_identity()
+print(resp)
+
+# Run the script:
+python test_sts.py 
