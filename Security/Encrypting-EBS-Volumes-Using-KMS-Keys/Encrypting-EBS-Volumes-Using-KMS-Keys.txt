@@ -1,0 +1,62 @@
+# Encrypting EBS Volumes Using KMS Keys
+
+# Problem:
+# You need an encryption key for encrypting EBS volumes attached to your EC2
+# instances in a Region, and you need to rotate the key automatically every 365 days.
+
+# Solution
+# Create a customer-managed KMS key (CMK), enable yearly rotation of the key, enable
+# EC2 default encryption for EBS volumes in a Region, and specify the KMS key you
+# created.
+
+# Steps
+
+# Create a customer-managed KMS key and store the key ARN as a local variable:
+KMS_KEY_ID=$(aws kms create-key --description "<key-name>" \
+--output text --query KeyMetadata.KeyId)
+
+# Create a key alias to help you refer to the key in other steps:
+aws kms create-alias --alias-name alias/<key-name> \
+--target-key-id $KMS_KEY_ID
+
+# Enable automated rotation of the symmetric key material every 365 days:
+aws kms enable-key-rotation --key-id $KMS_KEY_ID
+
+# Enable EBS encryption by default for the EC2 service within your current Region:
+aws ec2 enable-ebs-encryption-by-default
+
+# Update the default KMS key used for default EBS encryption to your customer-managed
+# key that you created in step 1:
+aws ec2 modify-ebs-default-kms-key-id \
+--kms-key-id alias/<key-name>
+
+# Validation checks
+
+# Use the AWS CLI to retrieve the default EBS encryption status for the EC2 service:
+aws ec2 get-ebs-encryption-by-default
+
+# Retrieve the KMS key ID used for default encryption:
+aws ec2 get-ebs-default-kms-key-id
+
+# Check the automatic rotation status of the key you created:
+aws kms get-key-rotation-status --key-id $KMS_KEY_ID
+
+# Clean up 
+
+# Set the KMS Key used for EBS Encryption back:
+aws ec2 modify-ebs-default-kms-key-id \
+     --kms-key-id alias/aws/ebs
+
+# OR Disable default EBS Encryption:
+aws ec2 disable-ebs-encryption-by-default
+
+# Disable the KMS Key:
+aws kms disable-key --key-id $KMS_KEY_ID
+
+# Scheduled the KMS Key for deletion:
+aws kms schedule-key-deletion \
+--key-id $KMS_KEY_ID \
+--pending-window-in-days 7
+
+# Delete the Key Alias:
+aws kms delete-alias --alias-name alias/<key-name>
