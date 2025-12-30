@@ -1,0 +1,7 @@
+# SSH Key Pair Creation
+
+# Create SSH key pair via AWS CLI and save the pem locally:
+aws ec2 create-key-pair --key-name packtpub --key-type rsa --key-format pem --query "KeyMaterial" --output text > packtpub.pem
+
+# Change permissions:
+chmod 400 packtpub.pem

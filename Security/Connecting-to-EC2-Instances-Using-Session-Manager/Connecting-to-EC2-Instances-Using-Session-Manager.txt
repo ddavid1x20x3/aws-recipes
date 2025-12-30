@@ -1,0 +1,109 @@
+# Connecting to EC2 Instances Using AWS SSM Session Manager
+
+# Problem:
+# You have an EC2 instance in a private subnet and need to connect to the instance
+# without using SSH over the internet.
+
+# Solution:
+# Create an IAM role, attach the AmazonSSMManagedInstanceCore policy, create an EC2
+# instance profile, attach the IAM role you created to the instance profile, associate
+# the EC2 instance profile to an EC2 instance, and finally, run the aws ssm
+# start-session command to connect to the instance.
+
+# Steps 
+
+# Create a file named assume-role-policy.json with the following content (file pro‐
+# vided in the repository):
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "ec2.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+
+# Create an IAM role with the statement in the provided assume-role-policy.json file
+# using this command:
+ROLE_ARN=$(aws iam create-role --role-name <ssm-role-name> \
+--assume-role-policy-document file://assume-role-policy.json \
+--output text --query Role.Arn)
+
+# Attach the AmazonSSMManagedInstanceCore managed policy to the role so that the role
+# allows access to AWS Systems Manager:
+aws iam attach-role-policy --role-name <ssm-role-name> \
+--policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+# Create an instance profile:
+aws iam create-instance-profile \
+--instance-profile-name <ssm-instance-profile-name>
+
+# Add the role that you created to the instance profile:
+aws iam add-role-to-instance-profile \
+--role-name <ssm-role-name> \
+--instance-profile-name <ssm-instance-profile-name>
+
+# Query SSM for the latest Amazon Linux 2 AMI ID available in your Region and save it
+# as an environment variable:
+AMI_ID=$(aws ssm get-parameters --names \
+/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 \
+--query 'Parameters[0].[Value]' --output text)
+
+# Launch an instance in one of your subnets that references the instance profile you
+# created and also uses a Name tag that helps you identify the instance in the console:
+INSTANCE_ID=$(aws ec2 run-instances --image-id $AMI_ID \
+--count 1 \
+--instance-type t3.micro \
+--iam-instance-profile Name=<ssm-instance-profile-name> \
+--subnet-id $SUBNET_1 \
+--security-group-ids $INSTANCE_SG \
+--metadata-options \
+HttpTokens=required,HttpPutResponseHopLimit=64,HttpEndpoint=enabled \
+--tag-specifications \
+'ResourceType=instance,Tags=[{Key=Name,Value=<tag>}]' \
+'ResourceType=volume,Tags=[{Key=Name,Value=<tag>}]' \
+--query Instances[0].InstanceId \
+--output text)
+
+# Validation checks
+
+# Ensure your EC2 instance has registered with SSM. Use the follow‐ing command to
+# check the status. This command should return the instance ID:
+aws ssm describe-instance-information \
+--filters Key=ResourceType,Values=EC2Instance \
+--query "InstanceInformationList[].InstanceId" --output text
+
+# Connect to the EC2 instance by using SSM Session Manager:
+aws ssm start-session --target $INSTANCE_ID
+
+# You should now be connected to your instance and see a bash prompt. From the bash
+# prompt, run a command to validate you are connected to your EC2 instance by
+# querying the metadata service for an IMDSv2 token:
+TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
+
+# Use the token to query metadata for the instance profile associated with the instance:
+curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/info
+
+# Exit the Session Manager session:
+exit
+
+# Clean up
+
+# Terminate the EC2 Instance:
+aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+
+# Detach the policy from the role:
+aws iam detach-role-policy --role-name <ssm-role-name> --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+# Remove the role from the instance profile:
+aws iam remove-role-from-instance-profile --instance-profile-name <instance-profile-name> --role-name <ssm-role-name>
+
+# Delete the instance profile:
+aws iam delete-instance-profile --instance-profile-name <instance-profile-name>
+
+# Delete the role:
+aws iam delete-role --role-name <ssm-role-name>
