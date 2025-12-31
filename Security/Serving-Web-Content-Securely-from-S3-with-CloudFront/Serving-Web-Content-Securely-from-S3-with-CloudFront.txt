@@ -1,1 +1,128 @@
 # Serving Web Content Securely from S3 with CloudFront
+
+# Problem:
+# You have nonpublic web content in S3 and want to configure CloudFront to serve the
+# content.
+
+# Solution:
+# Create a CloudFront distribution and set the origin to your S3 bucket. Then config‐
+# ure an origin access identity (OAI) to require the bucket to be accessible only from
+# CloudFront.
+
+# Preparation
+
+# Create an index.html file
+echo "Hello World!" > index.html
+
+# Set a unique suffix to use for the S3 bucket name:
+RANDOM_STRING=$(aws secretsmanager get-random-password \
+--exclude-punctuation --exclude-uppercase \
+--password-length 6 --require-each-included-type \
+--output text \
+--query RandomPassword)
+
+# Create a S3 bucket:
+aws s3api create-bucket --bucket demo-bucket-$RANDOM_STRING
+
+# Copy the previously created file to the bucket:
+aws s3 cp index.html s3://demo-bucket-$RANDOM_STRING/
+
+# Set the public access block for your bucket:
+aws s3api put-public-access-block \
+     --bucket demo-bucket-$RANDOM_STRING \
+     --public-access-block-configuration "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+
+# Steps
+
+# Create a CloudFront OAI to reference in an S3 bucket policy:
+OAI=$(aws cloudfront create-cloud-front-origin-access-identity \
+--cloud-front-origin-access-identity-config \
+CallerReference="demo-bucket",Comment="demo-bucket OAI" \
+--query CloudFrontOriginAccessIdentity.Id --output text)
+
+# Use the sed command to replace the values in the distribution-config-template.json
+# file with your CloudFront OAI and S3 bucket name:
+sed -e "s/CLOUDFRONT_OAI/${OAI}/g" \
+-e "s|S3_BUCKET_NAME|demo-bucket-$RANDOM_STRING|g" \
+distribution-template.json > distribution.json
+
+# Create a CloudFront distribution that uses the distribution configuration JSON file
+# you just created:
+DISTRIBUTION_ID=$(aws cloudfront create-distribution \
+--distribution-config file://distribution.json \
+--query Distribution.Id --output text)
+
+# The distribution will take a few minutes to create; use this command to check the
+# status. Wait until the status reaches “Deployed”:
+aws cloudfront get-distribution --id $DISTRIBUTION_ID \
+--output text --query Distribution.Status
+
+# Configure the S3 bucket policy to allow only requests from CloudFront by using a
+# bucket policy like this (bucket-policy-template.json provided in the repository):
+{
+    "Version": "2012-10-17",
+    "Id": "PolicyForCloudFrontPrivateContent",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity CLOUDFRONT_OAI"
+            },
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::S3_BUCKET_NAME/*"
+        }
+    ]
+}
+
+# Use the sed command to replace the values in the bucket-policy-template.json file
+# with the CloudFront OAI and S3 bucket name:
+sed -e "s/CLOUDFRONT_OAI/${OAI}/g" \
+-e "s|S3_BUCKET_NAME|demo-bucket-$RANDOM_STRING|g" \
+bucket-policy-template.json > bucket-policy.json
+
+# Apply the bucket policy to the S3 bucket with your static web content:
+aws s3api put-bucket-policy --bucket demo-bucket-$RANDOM_STRING \
+--policy file://bucket-policy.json
+
+# Get the DOMAIN_NAME of the distribution you created:
+DOMAIN_NAME=$(aws cloudfront get-distribution --id $DISTRIBUTION_ID \
+--query Distribution.DomainName --output text)
+
+# Validation checks
+
+# Try to access the S3 bucket directly using HTTPS to verify that the bucket does not
+# serve content directly:
+curl https://awscookbook110-$RANDOM_STRING.s3.$AWS_REGION.amazonaws.com/index.html
+
+# Use curl to observe that your index.html file is served from the private S3 bucket
+# through CloudFront:
+curl $DOMAIN_NAME
+
+# Clean up
+
+# Disable the CloudFront distribution by logging into the console and clicking the
+# Disable button for the distribution that you created. This process can take up to
+# 15 minutes.
+
+# Delete the CloudFront distribution (after it has been disabled):
+aws cloudfront delete-distribution --id $DISTRIBUTION_ID \
+--if-match $(aws cloudfront get-distribution --id $DISTRIBUTION_ID \
+--query ETag --output text)
+
+# Delete the Origin Access Identity:
+aws cloudfront delete-cloud-front-origin-access-identity --id $OAI \
+--if-match $(aws cloudfront get-cloud-front-origin-access-identity \
+--id $OAI --query ETag --output text)
+
+# Clean up the bucket:
+aws s3 rm s3://demo-bucket-$RANDOM_STRING/index.html
+
+# Delete the S3 bucket:
+aws s3api delete-bucket --bucket demo-bucket-$RANDOM_STRING
+
+# Unset your manually created environment variables:
+unset DISTRIBUTION_ID
+unset DOMAIN_NAME
+unset OAI
+unset RANDOM_STRING
+unset BUCKET_NAME
