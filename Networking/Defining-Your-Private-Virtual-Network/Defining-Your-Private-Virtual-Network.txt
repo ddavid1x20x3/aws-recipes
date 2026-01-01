@@ -11,7 +11,6 @@
 
 # Create a VPC with an IPv4 CIDR block. We will use 10.10.0.0/16 as the address
 # range, but you can modify it based on your needs:
-
 VPC_ID=$(aws ec2 create-vpc --cidr-block 10.10.0.0/16 \
 --tag-specifications \
 'ResourceType=vpc,Tags=[{Key=Name,Value=DemoVCP}]' \
