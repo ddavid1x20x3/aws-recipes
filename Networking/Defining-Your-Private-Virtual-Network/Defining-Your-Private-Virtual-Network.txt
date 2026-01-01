@@ -21,6 +21,14 @@ aws ec2 associate-vpc-cidr-block \
 --cidr-block 10.11.0.0/16 \
 --vpc-id $VPC_ID
 
+# In addition to IPv4, VPC also supports IPv6. You can configure an Amazon-provided
+# IPv6 CIDR block by specifying the --amazon-provided-ipv6-cidr-block option.
+# Here is an example of creating a VPC with an IPv6 CIDR block:
+aws ec2 create-vpc --cidr-block 10.10.0.0/16 \
+--amazon-provided-ipv6-cidr-block \
+--tag-specifications
+'ResourceType=vpc,Tags=[{Key=Name,Value=AWSCookbook201-IPv6}]'
+
 # Validation Checks
 
 # Verify that the VPC’s state is available:
