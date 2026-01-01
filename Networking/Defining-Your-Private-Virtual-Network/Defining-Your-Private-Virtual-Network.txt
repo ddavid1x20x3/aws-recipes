@@ -1,0 +1,31 @@
+# Defining Your Private Virtual Network in the Cloud by Creating an Amazon VPC
+
+# Problem:
+# You need a network foundation to host cloud resources.
+
+# Solution:
+# You will create an Amazon Virtual Private Cloud (VPC) and configure a Classless
+# Inter-Domain Routing (CIDR) block for it.
+
+# Steps
+
+# Create a VPC with an IPv4 CIDR block. We will use 10.10.0.0/16 as the address
+# range, but you can modify it based on your needs:
+
+VPC_ID=$(aws ec2 create-vpc --cidr-block 10.10.0.0/16 \
+--tag-specifications \
+'ResourceType=vpc,Tags=[{Key=Name,Value=DemoVCP}]' \
+--output text --query Vpc.VpcId)
+
+# Validation Checks
+
+# Verify that the VPC’s state is available:
+aws ec2 describe-vpcs --vpc-ids $VPC_ID
+
+# Clean up
+
+# Delete the VPC you created:
+aws ec2 delete-vpc --vpc-id $VPC_ID
+
+# Unset the environment variable that you created manually:
+unset VPC_ID
