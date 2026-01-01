@@ -1,0 +1,91 @@
+# Using VPC Reachability Analyzer to Verify and Troubleshoot Network Paths
+
+# Problem:
+# You have two EC2 instances deployed in isolated subnets. You need to troubleshoot
+# SSH connectivity between them.
+
+# Solution:
+# You will create, analyze, and describe network insights by using the VPC Reachability
+# Analyzer. Based on the results, you will add a rule to the security group of instance 2
+# that allows the SSH port (TCP port 22) from instance 1’s security group. Finally, you
+# will rerun the VPC Reachability Analyzer and view the updated results.
+
+# Prerequisites:
+# VPC with isolated subnets in two AZs and associated route tables.
+# Two EC2 instances deployed in the isolated subnets. You will need the ability to
+# connect to these for testing.
+
+# Steps 
+
+# Create a network insights path specifying both of the EC2 instances you deployed
+# and TCP port 22:
+INSIGHTS_PATH_ID=$(aws ec2 create-network-insights-path \
+--source $INSTANCE_ID_1 --destination-port 22 \
+--destination $INSTANCE_ID_2 --protocol tcp \
+--output text --query NetworkInsightsPath.NetworkInsightsPathId)
+
+# Start the network insights analysis between the two instances using the
+# INSIGHTS_PATH_ID created in the previous step:
+ANALYSIS_ID_1=$(aws ec2 start-network-insights-analysis \
+--network-insights-path-id $INSIGHTS_PATH_ID --output text \
+--query NetworkInsightsAnalysis.NetworkInsightsAnalysisId)
+
+# Wait a few seconds until the analysis is done running and then view the results:
+aws ec2 describe-network-insights-analyses \
+--network-insights-analysis-ids $ANALYSIS_ID_1
+
+aws ec2 describe-network-insights-analyses --network-insights-analysis-ids \
+$ANALYSIS_ID_1 | grep -iE "networkpath|explanationcode"
+
+# Update the security group attached to instance 2. Add a rule to allow access from
+# instance 1’s security group to TCP port 22 (SSH):
+aws ec2 authorize-security-group-ingress \
+--protocol tcp --port 22 \
+--source-group $INSTANCE_SG_ID_1 \
+--group-id $INSTANCE_SG_ID_2
+
+# Rerun the network insights analysis. Use the same INSIGHTS_PATH_ID as you did
+# previously:
+ANALYSIS_ID_2=$(aws ec2 start-network-insights-analysis \
+--network-insights-path-id $INSIGHTS_PATH_ID --output text \
+--query NetworkInsightsAnalysis.NetworkInsightsAnalysisId)
+
+# Show the results of the new analysis:
+aws ec2 describe-network-insights-analyses \
+--network-insights-analysis-ids $ANALYSIS_ID_2
+
+# Validation checks
+
+# List the IP address for instance 2:
+aws ec2 describe-instances --instance-ids $INSTANCE_ID_2 \
+--output text --query Reservations[0].Instances[0].PrivateIpAddress
+
+# Connect to your EC2 instance by using SSM Session Manager:
+aws ssm start-session --target $INSTANCE_ID_1
+
+# Install the Ncat utility:
+sudo yum -y install nc
+
+# Test SSH connectivity to instance 2 (use instance 2’s IP that you listed previously):
+nc -vz $INSTANCE_IP_2 22
+
+# Exit the Session Manager session:
+exit
+
+# Clean up 
+
+# Delete the analyses:
+aws ec2 delete-network-insights-analysis \
+--network-insights-analysis-id $ANALYSIS_ID_1
+
+aws ec2 delete-network-insights-analysis \
+--network-insights-analysis-id $ANALYSIS_ID_2
+
+# Delete the path:
+aws ec2 delete-network-insights-path \
+--network-insights-path-id $INSIGHTS_PATH_ID
+
+# Unset the environment variable that you created manually:
+unset INSIGHTS_PATH_ID
+unset ANALYSIS_ID_1
+unset ANALYSIS_ID_2
