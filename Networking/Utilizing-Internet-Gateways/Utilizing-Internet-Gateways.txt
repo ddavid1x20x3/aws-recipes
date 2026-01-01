@@ -1,0 +1,78 @@
+# Connecting Your VPC to the Internet Using an Internet Gateway
+
+# Problem:
+# You have an existing EC2 instance in a subnet of a VPC. You need to provide the
+# ability for this instance to directly reach clients on the internet.
+
+# Solution:
+# You will create an internet gateway and attach it to your VPC. Next you will modify
+# the route table associated with the subnet where the EC2 instance lives. You will add
+# a route that sends traffic from the subnets to the internet gateway. Finally, create
+# an Elastic IP (EIP) and associate it with the instance.
+
+# Prerequisites:
+# VPC and subnets created in two AZs and associated route tables.
+# EC2 instance deployed. You will need the ability to connect to this for testing.
+
+# Steps 
+
+# Create an internet gateway (IGW):
+INET_GATEWAY_ID=$(aws ec2 create-internet-gateway \
+--tag-specifications \
+'ResourceType=internet-gateway,Tags=[{Key=Name,Value=DemoIGW}]' \
+--output text --query InternetGateway.InternetGatewayId)
+
+# Attach the internet gateway to the existing VPC:
+aws ec2 attach-internet-gateway \
+--internet-gateway-id $INET_GATEWAY_ID --vpc-id $VPC_ID
+
+# In each route table of your VPC, create a route that sets the default route
+# destination to the internet gateway:
+aws ec2 create-route --route-table-id $ROUTE_TABLE_ID_1 \
+--destination-cidr-block 0.0.0.0/0 --gateway-id $INET_GATEWAY_ID
+
+aws ec2 create-route --route-table-id $ROUTE_TABLE_ID_2 \
+--destination-cidr-block 0.0.0.0/0 --gateway-id $INET_GATEWAY_ID
+
+# Create an EIP:
+ALLOCATION_ID=$(aws ec2 allocate-address --domain vpc \
+--output text --query AllocationId)
+
+# Associate the EIP with the existing EC2 instance:
+aws ec2 associate-address \
+--instance-id $INSTANCE_ID --allocation-id $ALLOCATION_ID
+
+# Validation checks
+
+# Connect to the EC2 instance using SSM Session Manager or SSH:
+aws ssm start-session --target $INSTANCE_ID
+ssh ec2-user@<EIP>
+
+# Ping a host on the internet to test internet connectivity:
+ping -c 4 gnu.org 
+
+# Verify the public IP is not part of OS configuration:
+curl http://169.254.169.254/latest/meta-data/public-ipv4
+
+# Clean up
+
+# Disassociate the Elastic IP address from the EC2 Instance:
+aws ec2 disassociate-address --association-id \
+$(aws ec2 describe-addresses \
+--allocation-ids $ALLOCATION_ID \
+--output text --query Addresses[0].AssociationId)
+
+# Deallocate the Elastic IP address that you created:
+aws ec2 release-address --allocation-id $ALLOCATION_ID
+
+# Detach the IGW:
+aws ec2 detach-internet-gateway \
+--internet-gateway-id $INET_GATEWAY_ID --vpc-id $VPC_ID
+
+Delete the IGW:
+aws ec2 delete-internet-gateway \
+--internet-gateway-id $INET_GATEWAY_ID
+
+Unset the environment variable that you created manually:
+unset INET_GATEWAY_ID
+unset ALLOCATION_ID
