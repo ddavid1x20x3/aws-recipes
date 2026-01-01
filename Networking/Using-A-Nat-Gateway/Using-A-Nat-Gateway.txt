@@ -1,0 +1,70 @@
+# Using a NAT Gateway for Outbound Internet Access from Private Subnets
+
+# Problem:
+# You have public subnets in your VPC that have a route to an internet gateway. You
+# want to leverage this setup to provide outbound-only internet access for an instance
+# in private subnets.
+
+# Solution:
+# Create a NAT gateway in one of the public subnets. Then create an Elastic IP and
+# associate it with the NAT gateway. In the route table associated with the private
+# subnets, add a route for internet-bound traffic that targets the NAT gateway.
+
+# Prerequisites:
+# VPC with public subnets in two AZs and associated route tables.
+# Isolated subnets created in two AZs (we will turn these into the private subnets)
+# and associated route tables.
+# Two EC2 instances deployed in the isolated subnets. You will need the ability to
+# connect to these for testing.
+
+# Steps
+
+# Create an Elastic IP to be used with the NAT gateway:
+ALLOCATION_ID=$(aws ec2 allocate-address --domain vpc \
+--output text --query AllocationId)
+
+# Create a NAT gateway within the public subnet of AZ1:
+NAT_GATEWAY_ID=$(aws ec2 create-nat-gateway \
+--subnet-id $VPC_PUBLIC_SUBNET_1 \
+--allocation-id $ALLOCATION_ID \
+--output text --query NatGateway.NatGatewayId)
+
+# This will take a few moments for the state to become available; check the status:
+aws ec2 describe-nat-gateways \
+--nat-gateway-ids $NAT_GATEWAY_ID \
+--output text --query NatGateways[0].State
+
+# Add a default route for 0.0.0.0/0 with a destination of the NAT gateway to both of
+# the private tier’s route tables. This default route sends all traffic not matching a
+# more specific route to the destination specified:
+aws ec2 create-route --route-table-id $PRIVATE_RT_ID_1 \
+--destination-cidr-block 0.0.0.0/0 \
+--nat-gateway-id $NAT_GATEWAY_ID
+
+aws ec2 create-route --route-table-id $PRIVATE_RT_ID_2 \
+--destination-cidr-block 0.0.0.0/0 \
+--nat-gateway-id $NAT_GATEWAY_ID
+
+# Validation checks
+
+# Connect to EC2 instance 1 by using SSM Session Manager:
+aws ssm start-session --target $INSTANCE_ID_1
+
+# Test internet access with a ping:
+ping -c 4 gnu.org 
+
+# Clean up
+
+# Delete the NAT gateway that you created (this may take up to 1 minute to delete):
+aws ec2 delete-nat-gateway --nat-gateway-id $NAT_GATEWAY_ID
+
+# Wait until the NAT gateway has reached the “deleted” state:
+aws ec2 describe-nat-gateways --nat-gateway-id $NAT_GATEWAY_ID \
+    --output text --query NatGateways[0].State
+
+# Release the Elastic IP address that you created:
+aws ec2 release-address --allocation-id $ALLOCATION_ID
+
+# Unset the environment variable that you created manually:
+unset ALLOCATION_ID
+unset NAT_GATEWAY_ID
