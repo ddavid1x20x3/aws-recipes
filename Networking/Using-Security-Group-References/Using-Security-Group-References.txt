@@ -1,0 +1,85 @@
+# Granting Dynamic Access by Referencing Security Groups
+
+# Problem:
+# You have an application group that currently consists of two instances and need to
+# allow Secure Shell (SSH) between them. This needs to be configured in a way to allow
+# for future growth of the number of instances securely and easily.
+
+# Solution:
+# In this recipe, we will create a security group and an associate each to the ENIs of
+# two EC2 instances. Finally, we will create an ingress rule that authorizes the
+# security group to reach itself on TCP port 22.
+
+# Prerequisites:
+# VPC with a subnet and associated route table.
+# Two EC2 instances deployed in the subnet. You will need the ability to connect to
+# these for testing.
+
+# Steps
+
+# Create a new security group for the EC2 instances:
+SG_ID=$(aws ec2 create-security-group \
+--group-name DemoSG \
+--description "Instance Security Group" --vpc-id $VPC_ID \
+--output text --query GroupId)
+
+# Attach the security group to instances 1 and 2:
+aws ec2 modify-instance-attribute --instance-id $INSTANCE_ID_1 \
+--groups $SG_ID
+
+aws ec2 modify-instance-attribute --instance-id $INSTANCE_ID_2 \
+--groups $SG_ID
+
+# You used the modify-instance-attribute command to attach a new security group to the
+# ENIs of your EC2 instances. To list the security groups associated with the ENI of
+# an EC2 instance, you can view them in the EC2 console under the Security tab of the
+# instance details or use this command (replacing $INSTANCE_ID_1 with your own instance
+# ID):
+aws ec2 describe-security-groups --group-ids \
+$(aws ec2 describe-instances --instance-id \
+$INSTANCE_ID_1 --query "Reservations[].Instances[].SecurityGroups[].GroupId[]" \
+--output text) --output text
+
+# Add an ingress rule to the security group that allows access on TCP port 22 from
+# itself:
+aws ec2 authorize-security-group-ingress \
+--protocol tcp --port 22 \
+--source-group $SG_ID \
+--group-id $SG_ID \
+
+# Validation checks
+
+# List the IP address for instance 2:
+aws ec2 describe-instances --instance-ids $INSTANCE_ID_2 \
+--output text \
+--query Reservations[0].Instances[0].PrivateIpAddress
+
+# Connect to your instance 1 by using SSM Session Manager:
+aws ssm start-session --target $INSTANCE_ID_1
+
+# Install the Ncat utility:
+sudo yum -y install nc
+
+# Test SSH connectivity to instance 2 (use instance 2’s IP that you listed previously):
+nc -vz $INSTANCE_IP_2 22
+
+# Exit the Session Manager session:
+exit
+
+# Clean up 
+
+# Detach the security groups you created from each instance and attach the VPC default
+# security group (so that you can delete the security groups in the next step):
+aws ec2 modify-instance-attribute --instance-id \
+$INSTANCE_ID_1 --groups $DEFAULT_VPC_SECURITY_GROUP
+
+aws ec2 modify-instance-attribute --instance-id \
+$INSTANCE_ID_2 --groups $DEFAULT_VPC_SECURITY_GROUP
+
+# Delete the security group that you created:
+aws ec2 delete-security-group --group-id $SG_ID
+
+# Unset the environment variable that you created manually:
+unset SG_ID
+unset INSTANCE_ID_3
+unset INSTANCE_PROFILE
