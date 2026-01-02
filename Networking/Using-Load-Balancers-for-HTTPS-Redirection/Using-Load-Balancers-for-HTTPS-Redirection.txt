@@ -1,0 +1,166 @@
+# Redirecting HTTP Traffic to HTTPS with an Application Load Balancer
+
+# Problem:
+# You have a containerized application running in a private subnet. Users on the
+# internet need to access this application. To help secure the application, you would
+# like to redirect all requests from HTTP to HTTPS.
+
+# Solution:
+# Create an Application Load Balancer (ALB). Next, create listeners on the ALB for
+# ports 80 and 443, target groups for your containerized application, and listener
+# rules. Configure the listener rules to send traffic to your target group. 
+# Finally, configure an action to redirect with an HTTP 301 response code, port 80
+# (HTTP) to port 443 (HTTPS) while preserving the URL in the request.
+
+# Prerequisites:
+# VPC with public subnets in two AZs and associated route tables.
+# Private subnets created in two AZs and associated route tables.
+# An ECS cluster and container definition exposing a web application on port 80.
+# A Fargate service that runs tasks on the ECS cluster.
+# OpenSSL. (You can install this using brew install openssl or yum install openssl.)
+
+# Steps
+
+# Create a new private key to be used for the certificate:
+openssl genrsa 2048 > my-private-key.pem
+
+# Generate a self-signed certificate using OpenSSL CLI:
+openssl req -new -x509 -nodes -sha256 -days 365 \
+-key my-private-key.pem -outform PEM -out my-certificate.pem
+
+# Upload the generated certificate into IAM:
+CERT_ARN=$(aws iam upload-server-certificate \
+--server-certificate-name <demo-cert> \
+--certificate-body file://my-certificate.pem \
+--private-key file://my-private-key.pem \
+--query ServerCertificateMetadata.Arn --output text)
+
+# Create a security group to use with the ALB that you will create later:
+ALB_SG_ID=$(aws ec2 create-security-group --group-name DemoSG \
+--description "ALB Security Group" --vpc-id $VPC_ID \
+--output text --query GroupId)
+
+# Add rules to the security group to allow HTTP and HTTPS traffic from the world:
+aws ec2 authorize-security-group-ingress \
+--protocol tcp --port 443 \
+--cidr '0.0.0.0/0' \
+--group-id $ALB_SG_ID
+
+aws ec2 authorize-security-group-ingress \
+--protocol tcp --port 80 \
+--cidr '0.0.0.0/0' \
+--group-id $ALB_SG_ID
+
+# Authorize the container’s security group to allow ingress traffic from the ALB:
+aws ec2 authorize-security-group-ingress \
+--protocol tcp --port 80 \
+--source-group $ALB_SG_ID \
+--group-id $APP_SG_ID
+
+# Create an ALB across the public subnets and assign it the previously created
+# security group:
+LOAD_BALANCER_ARN=$(aws elbv2 create-load-balancer \
+--name demo-alb \
+--subnets $VPC_PUBLIC_SUBNETS --security-groups $ALB_SG_ID \
+--scheme internet-facing \
+--output text --query LoadBalancers[0].LoadBalancerArn)
+
+# Create a target group for the Load Balancer:
+TARGET_GROUP=$(aws elbv2 create-target-group \
+--name DemoTG --vpc-id $VPC_ID \
+--protocol HTTP --port 80 --target-type ip \
+--query "TargetGroups[0].TargetGroupArn" \
+--output text)
+
+# Get the IP of the container that is running your application:
+TASK_ARN=$(aws ecs list-tasks --cluster $ECS_CLUSTER_NAME \
+--output text --query taskArns)
+
+CONTAINER_IP=$(aws ecs describe-tasks --cluster $ECS_CLUSTER_NAME \
+--task $TASK_ARN --output text \
+--query tasks[0].attachments[0].details[4] | cut -f 2)
+
+# Register a container with the target group:
+aws elbv2 register-targets --targets Id=$CONTAINER_IP \
+--target-group-arn $TARGET_GROUP
+
+# Create an HTTPS listener on the ALB that uses the certificate you imported and
+# forwards traffic to your target group:
+HTTPS_LISTENER_ARN=$(aws elbv2 create-listener \
+--load-balancer-arn $LOAD_BALANCER_ARN \
+--protocol HTTPS --port 443 \
+--certificates CertificateArn=$CERT_ARN \
+--default-actions Type=forward,TargetGroupArn=$TARGET_GROUP \
+--output text --query Listeners[0].ListenerArn)
+
+# Add a rule for the listener on port 443 to forward traffic to the target group that
+# you created:
+aws elbv2 create-rule \
+--listener-arn $HTTPS_LISTENER_ARN \
+--priority 10 \
+--conditions '{"Field":"path-pattern","PathPatternConfig":{"Values":["/*"]}}' \
+--actions Type=forward,TargetGroupArn=$TARGET_GROUP
+
+# Create a redirect response for all HTTP traffic that sends a 301 response to the
+# browser while preserving the full URL for the HTTPS redirect:
+aws elbv2 create-listener --load-balancer-arn $LOAD_BALANCER_ARN \
+--protocol HTTP --port 80 \
+--default-actions \
+"Type=redirect,RedirectConfig={Protocol=HTTPS,Port=443,Host='#{host}',Query='#{query}',Path='/#{path}',
+StatusCode=HTTP_301}"
+
+# Verify the health of the targets:
+aws elbv2 describe-target-health --target-group-arn $TARGET_GROUP \
+--query TargetHealthDescriptions[*].TargetHealth.State
+
+# Validation checks
+
+# Get the URL of the load balancer so that you can test it:
+LOAD_BALANCER_DNS=$(aws elbv2 describe-load-balancers \
+--names demo-alb \
+--output text --query LoadBalancers[0].DNSName)
+
+# Display the URL and test it in your browser. You should notice that you end up at an
+# HTTPS URL. You will most likely receive a warning from your browser because of the
+# self-signed cert:
+echo $LOAD_BALANCER_DNS
+
+# Or test it from the command line.
+
+# cURL the Load Balancer DNS over HTTP and observe the 301 code:
+curl -v http://$LOAD_BALANCER_DNS
+
+# cURL the Load Balancer DNS and specify to follow the redirect to HTTPS:
+curl -vkL http://$LOAD_BALANCER_DNS
+
+# Clean up
+
+# Delete the ALB:
+aws elbv2 delete-load-balancer \
+    --load-balancer-arn $LOAD_BALANCER_ARN
+
+# Delete the Certificate from IAM:
+aws iam delete-server-certificate --server-certificate-name AWSCookbook207
+
+# Delete the target group:
+aws elbv2 delete-target-group \
+    --target-group-arn $TARGET_GROUP
+
+# Revoke the security group ingress rule
+aws ec2 revoke-security-group-ingress \
+    --protocol tcp --port 80 \
+    --source-group $ALB_SG_ID \
+    --group-id $APP_SG_ID
+
+# Delete the Security Group:
+aws ec2 delete-security-group --group-id $ALB_SG_ID
+
+# Unset the environment variable that you created manually:
+unset TASK_ARN
+unset LOAD_BALANCER_ARN
+unset TARGET_GROUP
+unset ALB_SG_ID
+unset CERT_ARN
+unset CONTAINER_IP
+unset HTTPS_LISTENER_ARN
+unset LOAD_BALANCER_DNS
