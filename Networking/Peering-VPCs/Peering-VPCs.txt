@@ -1,0 +1,79 @@
+# Peering Two VPCs Together for Inter-VPC Network Communication
+
+# Problem:
+# You need to enable two instances in separate VPCs to communicate with each other
+# in a simple and cost-effective manner.
+
+# Solution:
+# Request a peering connection between two VPCs, accept the peering connection,
+# update the route tables for each VPC subnet, and finally test the connection from
+# one instance to another.
+
+# Prerequisites:
+# Two VPCs, each with isolated subnets in two AZs and associated route tables.
+# In each VPC, one EC2 instance that you can access for testing.
+
+# Steps
+
+# Create a VPC peering connection to connect VPC1 to VPC2:
+VPC_PEERING_CONNECTION_ID=$(aws ec2 create-vpc-peering-connection \
+--vpc-id $VPC_ID_1 --peer-vpc-id $VPC_ID_2 --output text \
+--query VpcPeeringConnection.VpcPeeringConnectionId)
+
+# Accept the peering connection:
+aws ec2 accept-vpc-peering-connection \
+--vpc-peering-connection-id $VPC_PEERING_CONNECTION_ID
+
+# In the route tables associated with each subnet, add a route to direct traffic
+# destined for the peered VPC’s CIDR range to the VPC_PEERING_CONNECTION_ID:
+aws ec2 create-route --route-table-id $VPC_SUBNET_RT_ID_1 \
+--destination-cidr-block $VPC_CIDR_2 \
+--vpc-peering-connection-id $VPC_PEERING_CONNECTION_ID
+
+aws ec2 create-route --route-table-id $VPC_SUBNET_RT_ID_2 \
+--destination-cidr-block $VPC_CIDR_1 \
+--vpc-peering-connection-id $VPC_PEERING_CONNECTION_ID
+
+# Add an ingress rule to instance 2’s security group that allows ICMPv4 access from
+# instance 1’s security group:
+aws ec2 authorize-security-group-ingress \
+--protocol icmp --port -1 \
+--source-group $INSTANCE_SG_1 \
+--group-id $INSTANCE_SG_2
+
+# Validation checks
+
+# Get instance 2’s IP:
+aws ec2 describe-instances --instance-ids $INSTANCE_ID_2\
+--output text \
+--query Reservations[0].Instances[0].PrivateIpAddress
+
+# Ensure your EC2 instance 1 has registered with SSM. Use this command to check the
+# status:
+aws ssm describe-instance-information \
+--filters Key=ResourceType,Values=EC2Instance \
+--query "InstanceInformationList[].InstanceId" --output text
+
+# Connect to your EC2 instance by using SSM Session Manager:
+aws ssm start-session --target $INSTANCE_ID_1
+
+# Ping instance 2 from instance 1:
+ping -c 4 <<INSTANCE_IP_2>>
+
+# Exit the Session Manager session:
+exit
+
+# Clean up
+
+# Delete the security group rule:
+aws ec2 revoke-security-group-ingress \
+--protocol icmp --port -1 \
+--source-group $INSTANCE_SG_1 \
+--group-id $INSTANCE_SG_2
+
+# Delete the Peering connection:
+aws ec2 delete-vpc-peering-connection \
+--vpc-peering-connection-id $VPC_PEERING_CONNECTION_ID
+
+# Unset your manually created environment variables:
+unset VPC_PEERING_CONNECTION_ID
