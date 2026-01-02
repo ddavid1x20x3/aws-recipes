@@ -1,0 +1,84 @@
+# Controlling Network Access to S3 from Your VPC Using VPC Endpoints
+
+# Problem:
+# Resources within your VPC should be able to access only a specific S3 bucket. Also,
+# this S3 traffic should not traverse the internet for security reasons and to keep
+# bandwidth costs low.
+
+# Solution:
+# You will create a gateway VPC endpoint for S3, associate it with a route table, and
+# customize its policy document.
+
+# Prerequisites:
+# VPC with isolated subnets in two AZs and associated route tables.
+# One EC2 instance in a public subnet that you can access for testing.
+# An existing S3 bucket that you want to limit access to.
+
+# Steps
+
+# Create a gateway endpoint in your VPC and associate the endpoint with the
+# isolated route tables:
+END_POINT_ID=$(aws ec2 create-vpc-endpoint \
+--vpc-id $VPC_ID \
+--service-name com.amazonaws.$AWS_REGION.s3 \
+--route-table-ids $RT_ID_1 $RT_ID_2 \
+--query VpcEndpoint.VpcEndpointId --output text)
+
+# Create a template endpoint policy file called policy.json with the following content
+# (included in the repository). This is used to limit access to only the S3 bucket that
+# you created in the preparation steps:
+{
+  "Statement": [
+    {
+      "Sid": "RestrictToOneBucket",
+      "Principal": "*",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Effect": "Allow",
+      "Resource": ["arn:aws:s3:::S3BucketName",
+                    "arn:aws:s3:::S3BucketName/*"]
+    }
+  ]
+}
+
+# Insert your S3_BUCKET_NAME in the policy-template.json file:
+sed -e "s/S3BucketName/${BUCKET_NAME}/g" \
+policy-template.json > policy.json
+
+# Modify the endpoint’s policy document. Endpoint policies limit or restrict the
+# resources that can be accessed through the VPC endpoint:
+aws ec2 modify-vpc-endpoint \
+--policy-document file://policy.json \
+--vpc-endpoint-id $END_POINT_ID
+
+# Validation checks
+
+# Output the name of your S3 Bucket so that you can refer to it when you are connected
+# to your EC2 Instance:
+echo $BUCKET_NAME
+
+# Connect to the EC2 instance by using SSM Session Manager:
+aws ssm start-session --target $INSTANCE_ID
+
+# Set the Region by grabbing the value from the instance’s metadata:
+export AWS_DEFAULT_REGION=$(curl \
+--silent http://169.254.169.254/latest/dynamic/instance-identity/document \
+awk -F'"' ' /region/ {print $4}')
+
+# Retrieve the allowed S3 bucket name:
+BUCKET=$(aws ssm get-parameters \
+--names "DemoName" \
+--query "Parameters[*].Value" --output text)
+
+# Test access by trying to copy a file from your S3 bucket:
+aws s3 cp s3://${BUCKET_NAME}/test_file /home/ssm-user/
+
+# Clean up
+
+# Delete the VPC Endpoint:
+aws ec2 delete-vpc-endpoints --vpc-endpoint-ids $END_POINT_ID
+
+# Unset your manually created environment variables:
+unset END_POINT_ID
